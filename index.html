@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Patrón Adaptador - Pasarela de Pagos</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f4f6f8; padding: 20px; display: flex; justify-content: center; }
+    .card { background: white; padding: 24px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); width: 100%; max-width: 550px; }
+    select, input, button { width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+    button { background: #0066cc; color: white; font-weight: bold; cursor: pointer; border: none; transition: background 0.2s; }
+    button:hover { background: #0052a3; }
+    .log-box { background: #1e1e1e; color: #4af626; padding: 14px; border-radius: 4px; font-family: monospace; font-size: 0.88em; min-height: 160px; white-space: pre-wrap; margin-top: 15px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h2>Simulador de Pagos (Pattern Adapter)</h2>
+  <label>Monto a Pagar:</label>
+  <input type="number" id="monto" value="250.00">
+  
+  <label>Selecciona Método de Pago / Proveedor:</label>
+  <select id="proveedor">
+    <option value="stripe">Stripe (USD - Convierte a centavos enteros)</option>
+    <option value="paypal">PayPal (USD - Crea un objeto JSON)</option>
+    <option value="mercadopago">Mercado Pago (MXN - Objeto Preference)</option>
+    <option value="oxxo">Depósito en Oxxo (MXN - Genera Ficha/Voucher de pago)</option>
+  </select>
+
+  <button onclick="ejecutarPago()">Procesar Pago</button>
+
+  <h3>Consola Visual del Adaptador:</h3>
+  <div id="log" class="log-box">// Selecciona un método y presiona "Procesar Pago"...</div>
+</div>
+
+<script>
+  // =========================================================
+  // 1. SDKs de Terceros (Totalmente incompatibles entre sí)
+  // =========================================================
+  class StripeSDK {
+    cargarCentavos(cents) {
+      return { status: 200, stripe_id: "ch_" + Math.random().toString(36).substr(2, 6), charged: cents };
+    }
+  }
+
+  class PayPalSDK {
+    sendPayload(data) {
+      return { ack: "SUCCESS", transaction_amount: data.intent.amount + " " + data.intent.currency };
+    }
+  }
+
+  class MercadoPagoSDK {
+    createPaymentPreference(params) {
+      return { id: "MP-PREF-" + Math.floor(Math.random() * 899999 + 100000), status: "approved", amount: params.transaction_amount };
+    }
+  }
+
+  class OxxoPaySDK {
+    generateReferenceNumber(amountMXN, daysValid) {
+      // Oxxo no realiza un cobro bancario directo, genera un código de barras
+      const barcode = Math.floor(10000000000000 + Math.random() * 90000000000000);
+      return { reference: barcode, expire_days: daysValid, total: amountMXN };
+    }
+  }
+
+  // =========================================================
+  // 2. Adaptadores (Estandarizan la llamada a .pagar(monto))
+  // =========================================================
+  class StripeAdapter {
+    constructor() { this.stripe = new StripeSDK(); }
+    pagar(monto) {
+      const centavos = Math.round(monto * 100);
+      const res = this.stripe.cargarCentavos(centavos);
+      return `[StripeAdapter]:\n - Conversión: $${monto} USD -> ${centavos} centavos.\n - Respuesta SDK: ID ${res.stripe_id} procesado con éxito.`;
+    }
+  }
+
+  class PayPalAdapter {
+    constructor() { this.paypal = new PayPalSDK(); }
+    pagar(monto) {
+      const payload = { intent: { amount: monto.toFixed(2), currency: "USD" } };
+      const res = this.paypal.sendPayload(payload);
+      return `[PayPalAdapter]:\n - Conversión: $${monto} USD -> JSON Payload ${JSON.stringify(payload)}\n - Respuesta SDK: Estado ${res.ack}.`;
+    }
+  }
+
+  class MercadoPagoAdapter {
+    constructor() { this.mp = new MercadoPagoSDK(); }
+    pagar(monto) {
+      const params = { transaction_amount: monto, currency_id: "MXN", description: "Compra en tienda" };
+      const res = this.mp.createPaymentPreference(params);
+      return `[MercadoPagoAdapter]:\n - Conversión: $${monto} MXN -> Objeto Preference\n - Respuesta SDK: ID Orden ${res.id} (Estado: ${res.status}).`;
+    }
+  }
+
+  class OxxoAdapter {
+    constructor() { this.oxxo = new OxxoPaySDK(); }
+    pagar(monto) {
+      // Oxxo requiere definir vigencia en días
+      const res = this.oxxo.generateReferenceNumber(monto, 3);
+      return `[OxxoAdapter]:\n - Conversión: $${monto} MXN -> Generación de Voucher (Vigencia 3 días).\n - Respuesta SDK: Ficha creada.\n - Código de Referencia: ${res.reference}`;
+    }
+  }
+
+  // =========================================================
+  // 3. Cliente / Lógica de la Aplicación
+  // =========================================================
+  function ejecutarPago() {
+    const monto = parseFloat(document.getElementById('monto').value);
+    const proveedor = document.getElementById('proveedor').value;
+    const logDiv = document.getElementById('log');
+
+    if (!monto || monto <= 0) return alert("Ingresa un monto válido");
+
+    let adaptador;
+    switch (proveedor) {
+      case 'stripe':
+        adaptador = new StripeAdapter();
+        break;
+      case 'paypal':
+        adaptador = new PayPalAdapter();
+        break;
+      case 'mercadopago':
+        adaptador = new MercadoPagoAdapter();
+        break;
+      case 'oxxo':
+        adaptador = new OxxoAdapter();
+        break;
+    }
+
+    // La aplicación SIEMPRE ejecuta exactamente el mismo método: .pagar(monto)
+    logDiv.textContent = `[Sistema App]: Ejecutando cliente.pagar(${monto})...\n\n` + adaptador.pagar(monto);
+  }
+</script>
+
+</body>
+</html>
